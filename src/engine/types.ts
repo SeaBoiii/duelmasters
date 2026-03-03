@@ -87,8 +87,7 @@ export interface GameState {
 }
 
 export type GameAction =
-  | { type: "NEXT_PHASE" }
-  | { type: "END_TURN" }
+  | { type: "ADVANCE" }
   | { type: "CHARGE_MANA"; handInstanceId: string }
   | { type: "REQUEST_PLAY_CARD"; handInstanceId: string; free?: boolean }
   | { type: "TOGGLE_MANA_SELECTION"; manaInstanceId: string }

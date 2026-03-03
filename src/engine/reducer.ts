@@ -270,6 +270,44 @@ function beginTurn(state: GameState, playerId: PlayerId): void {
   }
 }
 
+function isStartingPlayersFirstTurn(state: GameState): boolean {
+  return state.turnNumber === 1 && state.activePlayerId === state.startingPlayerId;
+}
+
+function runUntapPhase(state: GameState): void {
+  const active = state.players[state.activePlayerId];
+  if (!isStartingPlayersFirstTurn(state)) {
+    beginTurn(state, state.activePlayerId);
+    pushLog(state, `${active.name} untaps.`);
+  } else {
+    pushLog(state, `${active.name} skips untap on the very first turn.`);
+  }
+  state.phase = "DRAW";
+}
+
+function runDrawPhase(state: GameState): void {
+  const active = state.players[state.activePlayerId];
+  if (!isStartingPlayersFirstTurn(state)) {
+    drawOne(state, state.activePlayerId);
+  } else {
+    pushLog(state, `${active.name} skips draw on the very first turn.`);
+  }
+  if (!state.winnerId) {
+    state.phase = "MANA";
+    state.chargedManaThisTurn = false;
+  }
+}
+
+function runAutoPhasesUntilDecision(state: GameState): void {
+  while (!state.winnerId && (state.phase === "UNTAP" || state.phase === "DRAW")) {
+    if (state.phase === "UNTAP") {
+      runUntapPhase(state);
+      continue;
+    }
+    runDrawPhase(state);
+  }
+}
+
 function getPlayActionType(card: CardDefinition): PendingManaPayment["actionType"] {
   if (isCreature(card)) {
     return "summon";
@@ -379,33 +417,13 @@ export function reduceGameState(state: GameState, action: GameAction): GameState
     }
 
     switch (action.type) {
-      case "NEXT_PHASE": {
+      case "ADVANCE": {
         if (draft.pendingPrompt || draft.pendingPayment) {
           return;
         }
-        const active = draft.players[draft.activePlayerId];
-        const isStartingPlayersFirstTurn = draft.turnNumber === 1 && draft.activePlayerId === draft.startingPlayerId;
-        if (draft.phase === "UNTAP") {
-          if (!isStartingPlayersFirstTurn) {
-            beginTurn(draft, draft.activePlayerId);
-            pushLog(draft, `${active.name} untaps.`);
-          } else {
-            pushLog(draft, `${active.name} skips untap on the very first turn.`);
-          }
-          draft.phase = "DRAW";
-          return;
-        }
-        if (draft.phase === "DRAW") {
-          if (!isStartingPlayersFirstTurn) {
-            drawOne(draft, draft.activePlayerId);
-            if (draft.winnerId) {
-              return;
-            }
-          } else {
-            pushLog(draft, `${active.name} skips draw on the very first turn.`);
-          }
-          draft.phase = "MANA";
-          draft.chargedManaThisTurn = false;
+
+        if (draft.phase === "UNTAP" || draft.phase === "DRAW") {
+          runAutoPhasesUntilDecision(draft);
           return;
         }
         if (draft.phase === "MANA") {
@@ -421,22 +439,14 @@ export function reduceGameState(state: GameState, action: GameAction): GameState
           return;
         }
         if (draft.phase === "END") {
-          pushLog(draft, `${active.name} is at END. Use End Turn to pass.`);
+          const endingPlayer = draft.players[draft.activePlayerId];
+          draft.activePlayerId = getOpponentId(draft.activePlayerId);
+          draft.turnNumber += 1;
+          draft.phase = "UNTAP";
+          draft.chargedManaThisTurn = false;
+          pushLog(draft, `${endingPlayer.name} ends turn.`);
+          runAutoPhasesUntilDecision(draft);
         }
-        return;
-      }
-      case "END_TURN": {
-        if (draft.pendingPrompt || draft.pendingPayment) {
-          return;
-        }
-        if (draft.phase !== "END") {
-          pushLog(draft, "You can only end turn during END phase.");
-          return;
-        }
-        draft.activePlayerId = getOpponentId(draft.activePlayerId);
-        draft.turnNumber += 1;
-        draft.phase = "UNTAP";
-        draft.chargedManaThisTurn = false;
         return;
       }
       case "CHARGE_MANA": {

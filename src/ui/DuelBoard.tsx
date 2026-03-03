@@ -203,7 +203,7 @@ export function DuelBoard({
     setToast(message);
   }
 
-  function handleNextPhase(): void {
+  function handleAdvance(): void {
     if (gameState.winnerId) {
       showToast("Game is over.");
       return;
@@ -212,24 +212,15 @@ export function DuelBoard({
       showToast("Resolve pending choices first.");
       return;
     }
-    if (gameState.phase === "END") {
-      showToast("Use End Turn to pass turn.");
-      return;
-    }
-    dispatch({ type: "NEXT_PHASE" });
+    dispatch({ type: "ADVANCE" });
   }
 
-  function handleEndTurn(): void {
-    if (gameState.winnerId) {
-      showToast("Game is over.");
-      return;
-    }
-    if (gameState.phase !== "END") {
-      showToast("End Turn is only available in END phase.");
-      return;
-    }
-    dispatch({ type: "END_TURN" });
-  }
+  const advanceLabel =
+    gameState.phase === "END"
+      ? "Pass Turn"
+      : gameState.phase === "UNTAP" || gameState.phase === "DRAW"
+        ? "Advance (Auto)"
+        : "Next Phase";
 
   function attemptCharge(cardInstanceId: string): void {
     if (gameState.phase !== "MANA") {
@@ -407,11 +398,8 @@ export function DuelBoard({
         <p>Turn {gameState.turnNumber}</p>
         {gameState.winnerId ? <p className="status">Winner: {gameState.players[gameState.winnerId].name}</p> : null}
         <div className="column gap">
-          <button type="button" onClick={handleNextPhase} disabled={!!gameState.winnerId}>
-            Next Phase
-          </button>
-          <button type="button" onClick={handleEndTurn} disabled={!!gameState.winnerId || gameState.phase !== "END"}>
-            End Turn
+          <button type="button" onClick={handleAdvance} disabled={!!gameState.winnerId}>
+            {advanceLabel}
           </button>
           <button type="button" className="secondary" onClick={onResetGame}>
             New Duel

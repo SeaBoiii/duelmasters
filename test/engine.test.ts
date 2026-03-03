@@ -87,40 +87,43 @@ function buildState(cardIndex: Record<string, CardDefinition>): GameState {
 }
 
 describe("phase progression", () => {
-  it("cycles UNTAP -> DRAW -> MANA -> MAIN -> BATTLE -> END", () => {
+  it("ADVANCE auto-runs UNTAP/DRAW, then walks player phases, then passes turn", () => {
     const filler = makeCard({ id: "filler", name: "Filler" });
     let state = buildState({ filler });
     state.phase = "UNTAP";
     state.players.P1.deck.push(makeInstance("d1", "filler", "P1"), makeInstance("d2", "filler", "P1"));
+    state.players.P2.deck.push(makeInstance("d3", "filler", "P2"), makeInstance("d4", "filler", "P2"));
 
-    state = reduceGameState(state, { type: "NEXT_PHASE" });
-    expect(state.phase).toBe("DRAW");
-
-    state = reduceGameState(state, { type: "NEXT_PHASE" });
+    state = reduceGameState(state, { type: "ADVANCE" });
     expect(state.phase).toBe("MANA");
 
-    state = reduceGameState(state, { type: "NEXT_PHASE" });
+    state = reduceGameState(state, { type: "ADVANCE" });
     expect(state.phase).toBe("MAIN");
 
-    state = reduceGameState(state, { type: "NEXT_PHASE" });
+    state = reduceGameState(state, { type: "ADVANCE" });
     expect(state.phase).toBe("BATTLE");
 
-    state = reduceGameState(state, { type: "NEXT_PHASE" });
+    state = reduceGameState(state, { type: "ADVANCE" });
     expect(state.phase).toBe("END");
+
+    state = reduceGameState(state, { type: "ADVANCE" });
+    expect(state.activePlayerId).toBe("P2");
+    expect(state.turnNumber).toBe(3);
+    expect(state.phase).toBe("MANA");
   });
 
-  it("End Turn only works in END phase", () => {
+  it("ADVANCE does not progress while pending prompts exist", () => {
     const filler = makeCard({ id: "filler", name: "Filler" });
     const state = buildState({ filler });
-    const before = reduceGameState(state, { type: "END_TURN" });
-    expect(before.activePlayerId).toBe("P1");
-    expect(before.turnNumber).toBe(2);
-
-    const endState = { ...state, phase: "END" as const };
-    const after = reduceGameState(endState, { type: "END_TURN" });
-    expect(after.activePlayerId).toBe("P2");
-    expect(after.phase).toBe("UNTAP");
-    expect(after.turnNumber).toBe(3);
+    state.phase = "MAIN";
+    state.pendingPayment = {
+      playerId: "P1",
+      cardInstanceId: "any",
+      selectedManaInstanceIds: [],
+      actionType: "cast"
+    };
+    const blocked = reduceGameState(state, { type: "ADVANCE" });
+    expect(blocked.phase).toBe("MAIN");
   });
 });
 
@@ -192,7 +195,7 @@ describe("game ending rules", () => {
     state.players.P1.deck.push(makeInstance("deck-last", "filler", "P1"));
     state.players.P1.drawnCount = 39;
 
-    state = reduceGameState(state, { type: "NEXT_PHASE" });
+    state = reduceGameState(state, { type: "ADVANCE" });
 
     expect(state.winnerId).toBe("P2");
     expect(state.players.P1.hasLost).toBe(true);

@@ -95,8 +95,9 @@ Browser-only, hotseat 2-player card game inspired by Duel Masters mechanics.
 
 ## Phase Controls
 - The right panel always shows `CURRENT PHASE` and active player.
-- `Next Phase` advances one step: `UNTAP -> DRAW -> MANA -> MAIN -> BATTLE -> END`.
-- `End Turn` is only enabled during `END`.
+- `Advance` is the single phase control action.
+- `Advance` auto-runs passive phases (`UNTAP`, `DRAW`) and pauses at decision phases (`MANA`, `MAIN`, `BATTLE`).
+- At `END`, `Advance` passes turn to the opponent and auto-runs their `UNTAP`/`DRAW`.
 - Invalid action attempts show a short toast message and are not applied.
 
 ## Card Database
