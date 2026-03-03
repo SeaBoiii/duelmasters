@@ -128,6 +128,20 @@ describe("phase progression", () => {
 });
 
 describe("mana selection flow", () => {
+  it("charging mana moves 1 card from hand to mana tapped and advances to MAIN", () => {
+    const manaCard = makeCard({ id: "mana", name: "Mana Seed", civilizations: ["Fire"] });
+    const state = buildState({ mana: manaCard });
+    state.phase = "MANA";
+    state.players.P1.hand.push(makeInstance("h1", "mana", "P1"));
+
+    const next = reduceGameState(state, { type: "CHARGE_MANA", handInstanceId: "h1" });
+    expect(next.players.P1.hand).toHaveLength(0);
+    expect(next.players.P1.mana).toHaveLength(1);
+    expect(next.players.P1.mana[0]?.tapped).toBe(true);
+    expect(next.chargedManaThisTurn).toBe(true);
+    expect(next.phase).toBe("MAIN");
+  });
+
   it("cannot resolve cast/summon without selecting sufficient mana", () => {
     const summonCard = makeCard({
       id: "summon",

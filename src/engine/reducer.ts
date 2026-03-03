@@ -466,6 +466,8 @@ export function reduceGameState(state: GameState, action: GameAction): GameState
         if (card) {
           pushLog(draft, `${player.name} charges ${card.name} to mana.`);
         }
+        // Mana charge is once per turn; move straight to MAIN to reduce click friction.
+        draft.phase = "MAIN";
         return;
       }
       case "REQUEST_PLAY_CARD": {

@@ -220,6 +220,8 @@ export function DuelBoard({
       ? "Pass Turn"
       : gameState.phase === "UNTAP" || gameState.phase === "DRAW"
         ? "Advance (Auto)"
+        : gameState.phase === "MANA"
+          ? "Skip Mana Charge"
         : "Next Phase";
 
   function attemptCharge(cardInstanceId: string): void {
@@ -396,6 +398,7 @@ export function DuelBoard({
         <p className="phase-owner">Active Player: {activePlayer.name}</p>
         <p className="phase-big">CURRENT PHASE: {gameState.phase}</p>
         <p>Turn {gameState.turnNumber}</p>
+        {gameState.phase === "MANA" ? <p className="muted">Charge one card to mana, or skip to MAIN.</p> : null}
         {gameState.winnerId ? <p className="status">Winner: {gameState.players[gameState.winnerId].name}</p> : null}
         <div className="column gap">
           <button type="button" onClick={handleAdvance} disabled={!!gameState.winnerId}>

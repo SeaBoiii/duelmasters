@@ -16,7 +16,7 @@ Browser-only, hotseat 2-player card game inspired by Duel Masters mechanics.
 - Unified card sizing with shared `CardFrame` dimensions via CSS variables and fixed aspect ratio.
 - Replaced `/gallery` route with Deck Builder hover/tap CardFull preview.
 - Upgraded duel board layout: opponent top, player bottom, compact mana tiles, phase control side panel.
-- Added explicit phase controls: `Next Phase` and `End Turn` (`End Turn` only in `END`).
+- Streamlined phase controls with a single `Advance` action and smoother phase transitions.
 - Implemented manual mana payment selection using reducer `pendingPayment`.
 - Added strict deck-out loss rule when a draw makes deck size 0.
 - Preserved direct-attack loss when defender has 0 shields.
@@ -89,6 +89,7 @@ Browser-only, hotseat 2-player card game inspired by Duel Masters mechanics.
 3. Use hand actions:
    - `Charge to Mana` during `MANA`
    - `Cast / Summon` during `MAIN`
+   - Charging mana auto-advances to `MAIN`
 4. In `MAIN`, casting/summoning opens `Pay Mana`; select mana tiles manually, then confirm.
 5. In `BATTLE`, attack with eligible creatures and choose targets.
 6. Win by direct attack when opponent has 0 shields, or via deck-out rules.
@@ -97,6 +98,7 @@ Browser-only, hotseat 2-player card game inspired by Duel Masters mechanics.
 - The right panel always shows `CURRENT PHASE` and active player.
 - `Advance` is the single phase control action.
 - `Advance` auto-runs passive phases (`UNTAP`, `DRAW`) and pauses at decision phases (`MANA`, `MAIN`, `BATTLE`).
+- A successful `Charge to Mana` action in `MANA` immediately moves to `MAIN`.
 - At `END`, `Advance` passes turn to the opponent and auto-runs their `UNTAP`/`DRAW`.
 - Invalid action attempts show a short toast message and are not applied.
 
