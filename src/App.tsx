@@ -8,18 +8,38 @@ import { createInitialGameState, reduceGameState } from "./engine/reducer";
 import type { GameAction, GameState, PlayerId } from "./engine/types";
 import { DeckBuilder } from "./ui/DeckBuilder";
 import { DuelBoard } from "./ui/DuelBoard";
+import { DuelErrorBoundary } from "./ui/DuelErrorBoundary";
 import { SettingsAbout } from "./ui/SettingsAbout";
+import { DebugPanel } from "./ui/components/DebugPanel";
+
+function isDebugEnabled(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const standard = new URLSearchParams(window.location.search);
+  if (standard.get("debug") === "1") {
+    return true;
+  }
+  const hash = window.location.hash ?? "";
+  const hashQuery = hash.includes("?") ? hash.slice(hash.indexOf("?")) : "";
+  const hashParams = new URLSearchParams(hashQuery);
+  return hashParams.get("debug") === "1";
+}
 
 export function App() {
   const [cards, setCards] = useState<CardDefinition[] | null>(null);
   const [loadingMessage, setLoadingMessage] = useState("Loading card database...");
+  const [cardsReady, setCardsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [decks, setDecks] = useState<SavedDeck[]>([]);
   const [selectedDeckP1Id, setSelectedDeckP1Id] = useState<string | null>(null);
   const [selectedDeckP2Id, setSelectedDeckP2Id] = useState<string | null>(null);
   const [game, setGame] = useState<GameState | null>(null);
+  const [lastAction, setLastAction] = useState<GameAction | null>(null);
+  const [cardsReloadToken, setCardsReloadToken] = useState(0);
   const navigate = useNavigate();
+  const debugEnabled = useMemo(() => isDebugEnabled(), []);
 
   const cardsById = useMemo(() => {
     if (!cards) {
@@ -33,6 +53,7 @@ export function App() {
 
   useEffect(() => {
     let active = true;
+    setCardsReady(false);
     setError(null);
     void loadCardsWithCache({
       onProgress: (message) => {
@@ -54,6 +75,7 @@ export function App() {
           return;
         }
         setCards(loadedCards);
+        setCardsReady(true);
         setLoadingMessage(`Loaded ${loadedCards.length} cards.`);
       })
       .catch((loadError) => {
@@ -66,7 +88,7 @@ export function App() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [cardsReloadToken]);
 
   useEffect(() => {
     let active = true;
@@ -139,6 +161,7 @@ export function App() {
   }, [cards]);
 
   const dispatch = useCallback((action: GameAction) => {
+    setLastAction(action);
     setGame((current) => (current ? reduceGameState(current, action) : current));
   }, []);
 
@@ -194,6 +217,18 @@ export function App() {
         <section className="panel">
           <h1>Duel Masters Hotseat</h1>
           <p>{loadingMessage}</p>
+          <div className="row wrap gap">
+            <button
+              type="button"
+              onClick={() => {
+                setCards(null);
+                setCardsReady(false);
+                setCardsReloadToken((value) => value + 1);
+              }}
+            >
+              Retry Loading Card DB
+            </button>
+          </div>
         </section>
       </main>
     );
@@ -211,6 +246,8 @@ export function App() {
       </header>
       {error ? <p className="error-banner">{error}</p> : null}
       {syncMessage ? <p className="status">{syncMessage}</p> : null}
+      {!cardsReady ? <p className="status">Card DB syncing in background...</p> : null}
+      <DebugPanel enabled={debugEnabled} game={game} lastAction={lastAction} />
 
       <Routes>
         <Route path="/" element={<Navigate to="/duel" replace />} />
@@ -229,23 +266,37 @@ export function App() {
         <Route
           path="/duel"
           element={
-            <DuelBoard
-              cardsById={cardsById}
-              decks={decks}
-              selectedDeckP1Id={selectedDeckP1Id}
-              selectedDeckP2Id={selectedDeckP2Id}
-              onSelectDeck={(playerId, deckId) => {
-                if (playerId === "P1") {
-                  setSelectedDeckP1Id(deckId);
-                } else {
-                  setSelectedDeckP2Id(deckId);
-                }
+            <DuelErrorBoundary
+              onResetDuel={() => {
+                setGame(null);
+                setLastAction(null);
               }}
-              onStartGame={startGame}
-              onResetGame={() => setGame(null)}
-              game={game}
-              dispatch={dispatch}
-            />
+            >
+              <DuelBoard
+                cardsById={cardsById}
+                decks={decks}
+                selectedDeckP1Id={selectedDeckP1Id}
+                selectedDeckP2Id={selectedDeckP2Id}
+                onSelectDeck={(playerId, deckId) => {
+                  if (playerId === "P1") {
+                    setSelectedDeckP1Id(deckId);
+                  } else {
+                    setSelectedDeckP2Id(deckId);
+                  }
+                }}
+                onStartGame={startGame}
+                onResetGame={() => setGame(null)}
+                game={game}
+                dispatch={dispatch}
+                cardsReady={cardsReady}
+                loadingMessage={loadingMessage}
+                onRetryCardLoad={() => {
+                  setCards(null);
+                  setCardsReady(false);
+                  setCardsReloadToken((value) => value + 1);
+                }}
+              />
+            </DuelErrorBoundary>
           }
         />
         <Route path="/settings" element={<SettingsAbout />} />

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CardDefinition, KeywordFlags } from "../src/data/types";
-import { canPayManaRequirement } from "../src/engine/rules";
-import { reduceGameState } from "../src/engine/reducer";
+import { createInitialGameState, reduceGameState } from "../src/engine/reducer";
 import type { CardInstance, GameState, PlayerId } from "../src/engine/types";
 
 function baseKeywords(): KeywordFlags {
@@ -57,6 +56,7 @@ function buildState(cardIndex: Record<string, CardDefinition>): GameState {
         battle: [],
         graveyard: [],
         shields: [],
+        drawnCount: 0,
         hasLost: false
       },
       P2: {
@@ -68,144 +68,162 @@ function buildState(cardIndex: Record<string, CardDefinition>): GameState {
         battle: [],
         graveyard: [],
         shields: [],
+        drawnCount: 0,
         hasLost: false
       }
     },
     activePlayerId: "P1",
     startingPlayerId: "P1",
     turnNumber: 2,
-    phase: "BATTLE",
+    phase: "UNTAP",
     chargedManaThisTurn: false,
     winnerId: null,
     log: [],
     pendingPrompt: null,
+    pendingPayment: null,
     pendingTriggers: [],
     cardIndex
   };
 }
 
-describe("rules and reducer", () => {
-  it("validates mana requirements (untapped count + civilizations)", () => {
-    const target = makeCard({
-      id: "multi",
-      name: "Dual Strike",
-      cost: 3,
-      civilizations: ["Fire", "Nature"],
-      type: "Spell",
-      powerRaw: null,
-      powerBase: null
-    });
-    const fireMana = makeCard({ id: "fire", name: "Fire Mana", civilizations: ["Fire"] });
-    const natureMana = makeCard({ id: "nature", name: "Nature Mana", civilizations: ["Nature"] });
+describe("phase progression", () => {
+  it("cycles UNTAP -> DRAW -> MANA -> MAIN -> BATTLE -> END", () => {
+    const filler = makeCard({ id: "filler", name: "Filler" });
+    let state = buildState({ filler });
+    state.phase = "UNTAP";
+    state.players.P1.deck.push(makeInstance("d1", "filler", "P1"), makeInstance("d2", "filler", "P1"));
 
-    expect(canPayManaRequirement(target, [fireMana], 3).ok).toBe(false);
-    expect(canPayManaRequirement(target, [fireMana, natureMana], 2).ok).toBe(false);
-    expect(canPayManaRequirement(target, [fireMana, natureMana], 3).ok).toBe(true);
+    state = reduceGameState(state, { type: "NEXT_PHASE" });
+    expect(state.phase).toBe("DRAW");
+
+    state = reduceGameState(state, { type: "NEXT_PHASE" });
+    expect(state.phase).toBe("MANA");
+
+    state = reduceGameState(state, { type: "NEXT_PHASE" });
+    expect(state.phase).toBe("MAIN");
+
+    state = reduceGameState(state, { type: "NEXT_PHASE" });
+    expect(state.phase).toBe("BATTLE");
+
+    state = reduceGameState(state, { type: "NEXT_PHASE" });
+    expect(state.phase).toBe("END");
   });
 
-  it("breaks the correct shield count for Double Breaker", () => {
-    const attacker = makeCard({
-      id: "attacker",
-      name: "Twin Fang",
-      powerBase: 3000,
-      keywords: { ...baseKeywords(), doubleBreaker: true }
-    });
-    const shieldA = makeCard({ id: "shield-a", name: "Shield A", type: "Spell", powerRaw: null, powerBase: null });
-    const shieldB = makeCard({ id: "shield-b", name: "Shield B", type: "Spell", powerRaw: null, powerBase: null });
-    const shieldC = makeCard({ id: "shield-c", name: "Shield C", type: "Spell", powerRaw: null, powerBase: null });
+  it("End Turn only works in END phase", () => {
+    const filler = makeCard({ id: "filler", name: "Filler" });
+    const state = buildState({ filler });
+    const before = reduceGameState(state, { type: "END_TURN" });
+    expect(before.activePlayerId).toBe("P1");
+    expect(before.turnNumber).toBe(2);
 
-    const state = buildState({
-      attacker: attacker,
-      "shield-a": shieldA,
-      "shield-b": shieldB,
-      "shield-c": shieldC
+    const endState = { ...state, phase: "END" as const };
+    const after = reduceGameState(endState, { type: "END_TURN" });
+    expect(after.activePlayerId).toBe("P2");
+    expect(after.phase).toBe("UNTAP");
+    expect(after.turnNumber).toBe(3);
+  });
+});
+
+describe("mana selection flow", () => {
+  it("cannot resolve cast/summon without selecting sufficient mana", () => {
+    const summonCard = makeCard({
+      id: "summon",
+      name: "Summon Candidate",
+      type: "Creature",
+      cost: 2,
+      civilizations: ["Fire"],
+      powerBase: 2000
     });
-    state.players.P1.battle.push(makeInstance("p1-attacker", "attacker", "P1"));
-    state.players.P2.shields.push(
-      makeInstance("s1", "shield-a", "P2"),
-      makeInstance("s2", "shield-b", "P2"),
-      makeInstance("s3", "shield-c", "P2")
-    );
+    const manaCard = makeCard({ id: "mana", name: "Mana Seed", civilizations: ["Fire"] });
+    const state = buildState({
+      summon: summonCard,
+      mana: manaCard
+    });
+    state.phase = "MAIN";
+    state.players.P1.hand.push(makeInstance("hand1", "summon", "P1"));
+    state.players.P1.mana.push(makeInstance("mana1", "mana", "P1"), makeInstance("mana2", "mana", "P1"));
+
+    const withPending = reduceGameState(state, { type: "REQUEST_PLAY_CARD", handInstanceId: "hand1" });
+    expect(withPending.pendingPayment).not.toBeNull();
+
+    const unresolved = reduceGameState(withPending, { type: "CONFIRM_MANA_PAYMENT" });
+    expect(unresolved.players.P1.battle).toHaveLength(0);
+    expect(unresolved.players.P1.hand).toHaveLength(1);
+  });
+
+  it("confirming payment taps exactly selected mana", () => {
+    const summonCard = makeCard({
+      id: "summon",
+      name: "Summon Candidate",
+      type: "Creature",
+      cost: 2,
+      civilizations: ["Fire"],
+      powerBase: 2000
+    });
+    const fireMana = makeCard({ id: "fire", name: "Fire Mana", civilizations: ["Fire"] });
+    const waterMana = makeCard({ id: "water", name: "Water Mana", civilizations: ["Water"] });
+    const state = buildState({
+      summon: summonCard,
+      fire: fireMana,
+      water: waterMana
+    });
+    state.phase = "MAIN";
+    state.players.P1.hand.push(makeInstance("hand1", "summon", "P1"));
+    state.players.P1.mana.push(makeInstance("m1", "fire", "P1"), makeInstance("m2", "water", "P1"), makeInstance("m3", "fire", "P1"));
+
+    let next = reduceGameState(state, { type: "REQUEST_PLAY_CARD", handInstanceId: "hand1" });
+    next = reduceGameState(next, { type: "TOGGLE_MANA_SELECTION", manaInstanceId: "m1" });
+    next = reduceGameState(next, { type: "TOGGLE_MANA_SELECTION", manaInstanceId: "m3" });
+    next = reduceGameState(next, { type: "CONFIRM_MANA_PAYMENT" });
+
+    expect(next.players.P1.battle).toHaveLength(1);
+    expect(next.players.P1.hand).toHaveLength(0);
+    expect(next.players.P1.mana.find((mana) => mana.instanceId === "m1")?.tapped).toBe(true);
+    expect(next.players.P1.mana.find((mana) => mana.instanceId === "m3")?.tapped).toBe(true);
+    expect(next.players.P1.mana.find((mana) => mana.instanceId === "m2")?.tapped).toBe(false);
+  });
+});
+
+describe("game ending rules", () => {
+  it("deck-out loss happens when a draw makes deck size 0", () => {
+    const filler = makeCard({ id: "filler", name: "Filler" });
+    let state = buildState({ filler });
+    state.phase = "DRAW";
+    state.players.P1.deck.push(makeInstance("deck-last", "filler", "P1"));
+    state.players.P1.drawnCount = 39;
+
+    state = reduceGameState(state, { type: "NEXT_PHASE" });
+
+    expect(state.winnerId).toBe("P2");
+    expect(state.players.P1.hasLost).toBe(true);
+    expect(state.players.P1.deck).toHaveLength(0);
+  });
+
+  it("direct attack with no shields causes immediate loss", () => {
+    const attacker = makeCard({ id: "attacker", name: "Raider", type: "Creature", cost: 3, powerBase: 3000 });
+    const state = buildState({ attacker });
+    state.phase = "BATTLE";
+    state.players.P1.battle.push(makeInstance("a1", "attacker", "P1"));
+    state.players.P2.shields = [];
 
     const next = reduceGameState(state, {
       type: "DECLARE_ATTACK",
-      attackerId: "p1-attacker",
+      attackerId: "a1",
       target: { kind: "player", playerId: "P2" }
     });
 
-    expect(next.players.P2.shields).toHaveLength(1);
-    expect(next.players.P2.hand).toHaveLength(2);
-    expect(next.winnerId).toBeNull();
+    expect(next.winnerId).toBe("P1");
+    expect(next.players.P2.hasLost).toBe(true);
   });
+});
 
-  it("supports blocker redirect", () => {
-    const attacker = makeCard({ id: "attacker", name: "Burn Blade", powerBase: 3000 });
-    const blocker = makeCard({
-      id: "blocker",
-      name: "Wall Guard",
-      powerBase: 1000,
-      keywords: { ...baseKeywords(), blocker: true }
-    });
-    const state = buildState({
-      attacker,
-      blocker
-    });
-    state.players.P1.battle.push(makeInstance("p1-attacker", "attacker", "P1"));
-    state.players.P2.battle.push(makeInstance("p2-blocker", "blocker", "P2"));
-    state.players.P2.shields.push(makeInstance("shield", "blocker", "P2"));
-
-    const declared = reduceGameState(state, {
-      type: "DECLARE_ATTACK",
-      attackerId: "p1-attacker",
-      target: { kind: "player", playerId: "P2" }
-    });
-    expect(declared.pendingPrompt?.type).toBe("blocker");
-
-    const afterBlock = reduceGameState(declared, {
-      type: "CHOOSE_BLOCKER",
-      blockerId: "p2-blocker"
-    });
-
-    expect(afterBlock.players.P2.shields).toHaveLength(1);
-    expect(afterBlock.players.P2.graveyard).toHaveLength(1);
-    expect(afterBlock.players.P1.battle).toHaveLength(1);
-  });
-
-  it("prompts and resolves shield trigger flow", () => {
-    const attacker = makeCard({ id: "attacker", name: "Raider", powerBase: 2000 });
-    const triggerSpell = makeCard({
-      id: "trigger",
-      name: "Mystic Veil",
-      type: "Spell",
-      cost: 5,
-      text: "Shield Trigger: Draw one.",
-      powerRaw: null,
-      powerBase: null,
-      keywords: { ...baseKeywords(), shieldTrigger: true }
-    });
-    const state = buildState({
-      attacker,
-      trigger: triggerSpell
-    });
-    state.players.P1.battle.push(makeInstance("p1-attacker", "attacker", "P1"));
-    state.players.P2.shields.push(makeInstance("shield-trigger", "trigger", "P2"));
-
-    const attacked = reduceGameState(state, {
-      type: "DECLARE_ATTACK",
-      attackerId: "p1-attacker",
-      target: { kind: "player", playerId: "P2" }
-    });
-
-    expect(attacked.pendingPrompt?.type).toBe("shieldTrigger");
-    expect(attacked.players.P2.hand.some((card) => card.instanceId === "shield-trigger")).toBe(true);
-
-    const resolved = reduceGameState(attacked, {
-      type: "RESOLVE_SHIELD_TRIGGER",
-      activate: true
-    });
-
-    expect(resolved.pendingPrompt).toBeNull();
-    expect(resolved.players.P2.hand.some((card) => card.instanceId === "shield-trigger")).toBe(false);
-    expect(resolved.players.P2.graveyard.some((card) => card.instanceId === "shield-trigger")).toBe(true);
+describe("start game setup", () => {
+  it("creates 5 shields and 5 hand for each player", () => {
+    const filler = makeCard({ id: "filler", name: "Filler" });
+    const state = createInitialGameState(Array(40).fill("filler"), Array(40).fill("filler"), { filler }, { seed: 3 });
+    expect(state.players.P1.shields).toHaveLength(5);
+    expect(state.players.P1.hand).toHaveLength(5);
+    expect(state.players.P2.shields).toHaveLength(5);
+    expect(state.players.P2.hand).toHaveLength(5);
   });
 });

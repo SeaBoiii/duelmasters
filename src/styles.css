@@ -1,6 +1,8 @@
 :root {
   color-scheme: light;
   font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+  --card-w: clamp(150px, 19vw, 186px);
+  --card-ratio: 0.73;
   --bg: #f7f5ef;
   --panel: #fffdf6;
   --line: #d3c8b5;
@@ -98,6 +100,16 @@ select {
 .top-nav nav a.active {
   border-color: #8bbba4;
   background: #d8f3e5;
+}
+
+.inline-link-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 0.5rem;
+  padding: 0.45rem 0.7rem;
 }
 
 .panel {
@@ -203,10 +215,184 @@ select {
   border-bottom: none;
 }
 
+.card-search-row {
+  align-items: flex-start;
+}
+
+.search-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.card-info-btn {
+  display: none;
+}
+
+.deck-hover-preview {
+  position: fixed;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.5rem;
+}
+
 .duel-layout {
   display: grid;
   grid-template-columns: minmax(0, 2.1fr) minmax(280px, 1fr);
   gap: 1rem;
+}
+
+.board-layout {
+  align-items: start;
+}
+
+.board-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.field-side {
+  border: 1px solid #d6c5ab;
+  border-radius: 0.75rem;
+  padding: 0.6rem;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.opponent-side {
+  background: #fff8eb;
+}
+
+.player-side {
+  background: #eefbf4;
+}
+
+.field-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.field-header h3 {
+  margin: 0;
+}
+
+.field-counts {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.zone-block h4 {
+  margin: 0 0 0.3rem;
+  font-size: 0.9rem;
+}
+
+.shield-row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.3rem;
+}
+
+.shield-slot {
+  border: 1px dashed #c3b59f;
+  border-radius: 0.45rem;
+  min-height: 56px;
+  background: #f4ede1;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+.shield-slot.filled {
+  border-style: solid;
+  background: #1f2937;
+}
+
+.shield-slot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.battle-card-row,
+.hand-card-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.mana-tile-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.mana-tile {
+  border: 1px solid #bea882;
+  border-radius: 0.45rem;
+  background: #fff;
+  min-width: 44px;
+  min-height: 38px;
+  display: grid;
+  place-items: center;
+  padding: 0.2rem;
+}
+
+.mana-tile.tapped {
+  opacity: 0.7;
+  transform: rotate(4deg);
+}
+
+.phase-panel {
+  position: sticky;
+  top: 1rem;
+}
+
+.phase-owner {
+  margin: 0.1rem 0 0.4rem;
+}
+
+.phase-big {
+  font-size: clamp(1.02rem, 2vw, 1.35rem);
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  border: 1px solid #d0c3ae;
+  border-radius: 0.6rem;
+  background: #f8f2e6;
+  padding: 0.45rem 0.55rem;
+}
+
+.tiny-button {
+  padding: 0.2rem 0.4rem;
+  font-size: 0.78rem;
+}
+
+.log-wrapper {
+  margin-top: 0.4rem;
+  padding: 0.6rem;
+}
+
+.toast-banner {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90;
+  border: 1px solid #b98f4f;
+  border-radius: 999px;
+  background: #fff5df;
+  padding: 0.4rem 0.8rem;
+  box-shadow: 0 8px 20px #1a130733;
 }
 
 .battlefield {
@@ -341,6 +527,11 @@ select {
   gap: 0.8rem;
 }
 
+.debug-panel ol {
+  margin: 0;
+  padding-left: 1.15rem;
+}
+
 .log-panel {
   border: 1px solid #dfd3bf;
   border-radius: 0.6rem;
@@ -416,6 +607,10 @@ select {
   .side-panel {
     order: -1;
   }
+
+  .phase-panel {
+    position: static;
+  }
 }
 
 @media (max-width: 860px) {
@@ -435,5 +630,9 @@ select {
   .card-view,
   .card-view.compact {
     width: 100%;
+  }
+
+  .card-info-btn {
+    display: inline-flex;
   }
 }

@@ -2,7 +2,16 @@ import { produce } from "immer";
 import type { CardDefinition } from "../data/types";
 import { canPayManaRequirement, getAttackingPower, getShieldBreakCount, isCreature, isSpell, shuffleDeterministic } from "./rules";
 import { canCreatureAttack, getEligibleBlockers, getOpponentId } from "./selectors";
-import type { AttackContext, CardInstance, GameAction, GameState, PendingPrompt, PlayerId, PlayerState, TriggerOpportunity } from "./types";
+import type {
+  AttackContext,
+  CardInstance,
+  GameAction,
+  GameState,
+  PendingManaPayment,
+  PlayerId,
+  PlayerState,
+  TriggerOpportunity
+} from "./types";
 
 export const PHASE_ORDER: readonly string[] = ["UNTAP", "DRAW", "MANA", "MAIN", "BATTLE", "END"];
 
@@ -48,6 +57,7 @@ function createPlayerState(id: PlayerId, name: string, deckCards: CardInstance[]
     battle: [],
     graveyard: [],
     shields: [],
+    drawnCount: 0,
     hasLost: false
   };
 }
@@ -63,7 +73,14 @@ function drawOne(state: GameState, playerId: PlayerId): CardInstance | null {
     return null;
   }
   player.hand.push(next);
+  player.drawnCount += 1;
   pushLog(state, `${player.name} draws a card.`);
+  if (player.deck.length === 0) {
+    const opponent = getOpponentId(playerId);
+    state.winnerId = opponent;
+    player.hasLost = true;
+    pushLog(state, `${player.name} drew the final card and loses (deck-out rule).`);
+  }
   return next;
 }
 
@@ -253,33 +270,35 @@ function beginTurn(state: GameState, playerId: PlayerId): void {
   }
 }
 
-function tryCreateManaPrompt(state: GameState, playerId: PlayerId, handInstanceId: string): PendingPrompt | null {
+function getPlayActionType(card: CardDefinition): PendingManaPayment["actionType"] {
+  if (isCreature(card)) {
+    return "summon";
+  }
+  if (isSpell(card)) {
+    return "cast";
+  }
+  return "play";
+}
+
+function createPendingPayment(state: GameState, playerId: PlayerId, cardInstanceId: string): PendingManaPayment | null {
   const player = state.players[playerId];
-  const cardInstance = player.hand.find((card) => card.instanceId === handInstanceId);
+  const cardInstance = player.hand.find((card) => card.instanceId === cardInstanceId);
   const card = getCard(state, cardInstance ?? null);
   if (!cardInstance || !card) {
     return null;
   }
-  const manaCards = player.mana.map((mana) => state.cardIndex[mana.cardId]).filter((entry): entry is CardDefinition => !!entry);
-  const untapped = player.mana.filter((mana) => !mana.tapped).length;
-  const requirement = canPayManaRequirement(card, manaCards, untapped);
-  if (!requirement.ok) {
-    pushLog(state, `Cannot play ${card.name}. ${requirement.reason ?? ""}`.trim());
-    return null;
-  }
   if (card.cost === 0) {
-    const played = resolvePlayFromHand(state, playerId, handInstanceId, false);
+    const played = resolvePlayFromHand(state, playerId, cardInstanceId, false);
     if (!played) {
       pushLog(state, `Unable to play ${card.name}.`);
     }
     return null;
   }
   return {
-    type: "manaPayment",
     playerId,
-    handInstanceId,
-    selectedManaIds: [],
-    free: false
+    cardInstanceId,
+    selectedManaInstanceIds: [],
+    actionType: getPlayActionType(card)
   };
 }
 
@@ -305,6 +324,7 @@ function setupOpeningHands(player: PlayerState): void {
     const drawn = player.deck.shift();
     if (drawn) {
       player.hand.push(drawn);
+      player.drawnCount += 1;
     }
   }
 }
@@ -346,6 +366,7 @@ export function createInitialGameState(
       `${startingPlayerId === "P1" ? player1.name : player2.name} goes first.`
     ],
     pendingPrompt: null,
+    pendingPayment: null,
     pendingTriggers: [],
     cardIndex
   };
@@ -359,7 +380,7 @@ export function reduceGameState(state: GameState, action: GameAction): GameState
 
     switch (action.type) {
       case "NEXT_PHASE": {
-        if (draft.pendingPrompt) {
+        if (draft.pendingPrompt || draft.pendingPayment) {
           return;
         }
         const active = draft.players[draft.activePlayerId];
@@ -377,6 +398,9 @@ export function reduceGameState(state: GameState, action: GameAction): GameState
         if (draft.phase === "DRAW") {
           if (!isStartingPlayersFirstTurn) {
             drawOne(draft, draft.activePlayerId);
+            if (draft.winnerId) {
+              return;
+            }
           } else {
             pushLog(draft, `${active.name} skips draw on the very first turn.`);
           }
@@ -397,15 +421,26 @@ export function reduceGameState(state: GameState, action: GameAction): GameState
           return;
         }
         if (draft.phase === "END") {
-          draft.activePlayerId = getOpponentId(draft.activePlayerId);
-          draft.turnNumber += 1;
-          draft.phase = "UNTAP";
-          draft.chargedManaThisTurn = false;
+          pushLog(draft, `${active.name} is at END. Use End Turn to pass.`);
         }
         return;
       }
+      case "END_TURN": {
+        if (draft.pendingPrompt || draft.pendingPayment) {
+          return;
+        }
+        if (draft.phase !== "END") {
+          pushLog(draft, "You can only end turn during END phase.");
+          return;
+        }
+        draft.activePlayerId = getOpponentId(draft.activePlayerId);
+        draft.turnNumber += 1;
+        draft.phase = "UNTAP";
+        draft.chargedManaThisTurn = false;
+        return;
+      }
       case "CHARGE_MANA": {
-        if (draft.pendingPrompt || draft.phase !== "MANA" || draft.chargedManaThisTurn) {
+        if (draft.pendingPrompt || draft.pendingPayment || draft.phase !== "MANA" || draft.chargedManaThisTurn) {
           return;
         }
         const player = draft.players[draft.activePlayerId];
@@ -424,7 +459,7 @@ export function reduceGameState(state: GameState, action: GameAction): GameState
         return;
       }
       case "REQUEST_PLAY_CARD": {
-        if (draft.pendingPrompt) {
+        if (draft.pendingPrompt || draft.pendingPayment) {
           return;
         }
         const activeId = draft.activePlayerId;
@@ -442,22 +477,22 @@ export function reduceGameState(state: GameState, action: GameAction): GameState
           resolvePlayFromHand(draft, activeId, action.handInstanceId, true);
           return;
         }
-        const pending = tryCreateManaPrompt(draft, activeId, action.handInstanceId);
+        const pending = createPendingPayment(draft, activeId, action.handInstanceId);
         if (pending) {
-          draft.pendingPrompt = pending;
+          draft.pendingPayment = pending;
         }
         return;
       }
       case "TOGGLE_MANA_SELECTION": {
-        if (!draft.pendingPrompt || draft.pendingPrompt.type !== "manaPayment") {
+        if (!draft.pendingPayment) {
           return;
         }
-        const player = draft.players[draft.pendingPrompt.playerId];
+        const player = draft.players[draft.pendingPayment.playerId];
         const mana = player.mana.find((entry) => entry.instanceId === action.manaInstanceId);
         if (!mana || mana.tapped) {
           return;
         }
-        const selected = draft.pendingPrompt.selectedManaIds;
+        const selected = draft.pendingPayment.selectedManaInstanceIds;
         const index = selected.indexOf(action.manaInstanceId);
         if (index >= 0) {
           selected.splice(index, 1);
@@ -467,39 +502,53 @@ export function reduceGameState(state: GameState, action: GameAction): GameState
         return;
       }
       case "CONFIRM_MANA_PAYMENT": {
-        if (!draft.pendingPrompt || draft.pendingPrompt.type !== "manaPayment") {
+        if (!draft.pendingPayment) {
           return;
         }
-        const prompt = draft.pendingPrompt;
-        const player = draft.players[prompt.playerId];
-        const handCard = findInZone(player.hand, prompt.handInstanceId);
+        const payment = draft.pendingPayment;
+        if (draft.phase !== "MAIN") {
+          pushLog(draft, "Can only cast/summon during MAIN phase.");
+          return;
+        }
+        const player = draft.players[payment.playerId];
+        const handCard = findInZone(player.hand, payment.cardInstanceId);
         const card = getCard(draft, handCard);
         if (!handCard || !card) {
-          draft.pendingPrompt = null;
+          draft.pendingPayment = null;
           return;
         }
-        if (prompt.selectedManaIds.length !== card.cost) {
-          pushLog(draft, `Select exactly ${card.cost} mana to play ${card.name}.`);
+        const selectedSet = new Set(payment.selectedManaInstanceIds);
+        const selectedMana = player.mana.filter((mana) => selectedSet.has(mana.instanceId));
+        const selectedUntapped = selectedMana.filter((mana) => !mana.tapped);
+        if (selectedUntapped.length !== selectedSet.size) {
+          pushLog(draft, "Selected mana must be untapped.");
           return;
         }
-        for (const manaId of prompt.selectedManaIds) {
-          const mana = player.mana.find((entry) => entry.instanceId === manaId);
-          if (mana && !mana.tapped) {
-            mana.tapped = true;
-          }
+        if (selectedUntapped.length < card.cost) {
+          pushLog(draft, `Need at least ${card.cost} selected mana to play ${card.name}.`);
+          return;
         }
-        draft.pendingPrompt = null;
-        resolvePlayFromHand(draft, prompt.playerId, prompt.handInstanceId, false);
+        const manaCards = player.mana.map((mana) => draft.cardIndex[mana.cardId]).filter((entry): entry is CardDefinition => !!entry);
+        const manaRequirement = canPayManaRequirement(card, manaCards, player.mana.filter((mana) => !mana.tapped).length);
+        if (!manaRequirement.ok) {
+          pushLog(draft, `Cannot play ${card.name}. ${manaRequirement.reason ?? ""}`.trim());
+          return;
+        }
+        for (const mana of selectedUntapped) {
+          mana.tapped = true;
+        }
+        draft.pendingPayment = null;
+        resolvePlayFromHand(draft, payment.playerId, payment.cardInstanceId, false);
         return;
       }
       case "CANCEL_MANA_PAYMENT": {
-        if (draft.pendingPrompt?.type === "manaPayment") {
-          draft.pendingPrompt = null;
+        if (draft.pendingPayment) {
+          draft.pendingPayment = null;
         }
         return;
       }
       case "DECLARE_ATTACK": {
-        if (draft.pendingPrompt || draft.phase !== "BATTLE") {
+        if (draft.pendingPrompt || draft.pendingPayment || draft.phase !== "BATTLE") {
           return;
         }
         const attackerOwnerId = draft.activePlayerId;

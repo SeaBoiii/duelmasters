@@ -21,6 +21,7 @@ export interface PlayerState {
   battle: CardInstance[];
   graveyard: CardInstance[];
   shields: CardInstance[];
+  drawnCount: number;
   hasLost: boolean;
 }
 
@@ -43,12 +44,11 @@ export interface AttackContext {
   target: AttackTarget;
 }
 
-export interface ManaPaymentPrompt {
-  type: "manaPayment";
+export interface PendingManaPayment {
   playerId: PlayerId;
-  handInstanceId: string;
-  selectedManaIds: string[];
-  free: boolean;
+  cardInstanceId: string;
+  selectedManaInstanceIds: string[];
+  actionType: "summon" | "cast" | "play";
 }
 
 export interface BlockerPrompt {
@@ -64,7 +64,7 @@ export interface ShieldTriggerPrompt {
   handInstanceId: string;
 }
 
-export type PendingPrompt = ManaPaymentPrompt | BlockerPrompt | ShieldTriggerPrompt;
+export type PendingPrompt = BlockerPrompt | ShieldTriggerPrompt;
 
 export interface TriggerOpportunity {
   playerId: PlayerId;
@@ -81,12 +81,14 @@ export interface GameState {
   winnerId: PlayerId | null;
   log: string[];
   pendingPrompt: PendingPrompt | null;
+  pendingPayment: PendingManaPayment | null;
   pendingTriggers: TriggerOpportunity[];
   cardIndex: Record<string, CardDefinition>;
 }
 
 export type GameAction =
   | { type: "NEXT_PHASE" }
+  | { type: "END_TURN" }
   | { type: "CHARGE_MANA"; handInstanceId: string }
   | { type: "REQUEST_PLAY_CARD"; handInstanceId: string; free?: boolean }
   | { type: "TOGGLE_MANA_SELECTION"; manaInstanceId: string }

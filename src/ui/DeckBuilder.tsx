@@ -1,5 +1,10 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import type { CardDefinition, SavedDeck } from "../data/types";
+import { formatPower } from "../engine/rules";
+import { Modal } from "./components/Modal";
+import { CardFull } from "./components/cards/CardFull";
+import { CivPips } from "./components/cards/CivPips";
+import { KeywordBadges } from "./components/cards/KeywordBadges";
 import type { DeckInput } from "../data/deckStore";
 
 interface DeckBuilderProps {
@@ -11,6 +16,45 @@ interface DeckBuilderProps {
 }
 
 type DeckMap = Record<string, number>;
+
+interface DeckSearchRowProps {
+  card: CardDefinition;
+  copies: number;
+  onAdd: (card: CardDefinition) => void;
+  onPreview: (card: CardDefinition, x: number, y: number) => void;
+  onLeave: () => void;
+  onOpenInfo: (card: CardDefinition) => void;
+}
+
+const DeckSearchRow = memo(function DeckSearchRow({ card, copies, onAdd, onPreview, onLeave, onOpenInfo }: DeckSearchRowProps) {
+  return (
+    <div
+      className="search-row card-search-row"
+      onMouseEnter={(event) => onPreview(card, event.clientX, event.clientY)}
+      onMouseMove={(event) => onPreview(card, event.clientX, event.clientY)}
+      onMouseLeave={onLeave}
+    >
+      <div className="search-row-main">
+        <div className="row gap wrap">
+          <span className="pill">Cost {card.cost}</span>
+          <strong>{card.name}</strong>
+          <span className="muted">{card.type}</span>
+          <CivPips civilizations={card.civilizations} />
+          <span className="pill">Power {formatPower(card.powerBase, card.powerHasPlus)}</span>
+        </div>
+        <KeywordBadges card={card} />
+      </div>
+      <div className="row gap">
+        <button type="button" className="secondary card-info-btn" onClick={() => onOpenInfo(card)}>
+          Info
+        </button>
+        <button type="button" onClick={() => onAdd(card)} disabled={copies >= 4}>
+          {copies >= 4 ? "Max 4" : "Add"}
+        </button>
+      </div>
+    </div>
+  );
+});
 
 function deckMapFromCardIds(cardIds: string[]): DeckMap {
   return cardIds.reduce<DeckMap>((accumulator, cardId) => {
@@ -31,6 +75,24 @@ function deckMapToCardIds(deckMap: DeckMap): string[] {
 
 function countDeckCards(deckMap: DeckMap): number {
   return Object.values(deckMap).reduce((sum, count) => sum + count, 0);
+}
+
+interface PreviewState {
+  card: CardDefinition;
+  x: number;
+  y: number;
+}
+
+function clampPreview(x: number, y: number): { x: number; y: number } {
+  const width = 420;
+  const height = 620;
+  const margin = 12;
+  const maxX = Math.max(margin, window.innerWidth - width - margin);
+  const maxY = Math.max(margin, window.innerHeight - height - margin);
+  return {
+    x: Math.min(maxX, Math.max(margin, x + 16)),
+    y: Math.min(maxY, Math.max(margin, y + 16))
+  };
 }
 
 export function DeckBuilder({ cards, decks, onSaveDeck, onDeleteDeck, onGenerateStarters }: DeckBuilderProps) {
@@ -58,6 +120,8 @@ export function DeckBuilder({ cards, decks, onSaveDeck, onDeleteDeck, onGenerate
   const [costMin, setCostMin] = useState(0);
   const [costMax, setCostMax] = useState(12);
   const [message, setMessage] = useState<string | null>(null);
+  const [hoverPreview, setHoverPreview] = useState<PreviewState | null>(null);
+  const [mobilePreviewCard, setMobilePreviewCard] = useState<CardDefinition | null>(null);
 
   const deckCardIds = useMemo(() => deckMapToCardIds(deckMap), [deckMap]);
   const deckSize = deckCardIds.length;
@@ -127,12 +191,13 @@ export function DeckBuilder({ cards, decks, onSaveDeck, onDeleteDeck, onGenerate
   }, [cards, civilizationFilters, costMax, costMin, kindFilter, search, typeFilter]);
 
   const canSave = deckSize >= 40 && deckName.trim().length > 0;
+  const deckStatusMessage = deckSize >= 40 ? `Deck valid (${deckSize} cards).` : `${deckSize}/40 cards`;
 
   function setFeedback(next: string): void {
     setMessage(next);
     window.setTimeout(() => {
       setMessage((current) => (current === next ? null : current));
-    }, 2500);
+    }, 2800);
   }
 
   function addCard(card: CardDefinition): void {
@@ -203,6 +268,17 @@ export function DeckBuilder({ cards, decks, onSaveDeck, onDeleteDeck, onGenerate
     });
   }
 
+  function handlePreview(card: CardDefinition, cursorX: number, cursorY: number): void {
+    if (window.matchMedia("(hover: hover)").matches) {
+      const position = clampPreview(cursorX, cursorY);
+      setHoverPreview({
+        card,
+        x: position.x,
+        y: position.y
+      });
+    }
+  }
+
   return (
     <div className="screen-grid">
       <section className="panel">
@@ -232,23 +308,11 @@ export function DeckBuilder({ cards, decks, onSaveDeck, onDeleteDeck, onGenerate
           </label>
           <label>
             Cost Min
-            <input
-              type="number"
-              min={0}
-              max={20}
-              value={costMin}
-              onChange={(event) => setCostMin(Number(event.target.value) || 0)}
-            />
+            <input type="number" min={0} max={20} value={costMin} onChange={(event) => setCostMin(Number(event.target.value) || 0)} />
           </label>
           <label>
             Cost Max
-            <input
-              type="number"
-              min={0}
-              max={20}
-              value={costMax}
-              onChange={(event) => setCostMax(Number(event.target.value) || 0)}
-            />
+            <input type="number" min={0} max={20} value={costMax} onChange={(event) => setCostMax(Number(event.target.value) || 0)} />
           </label>
         </div>
 
@@ -269,21 +333,19 @@ export function DeckBuilder({ cards, decks, onSaveDeck, onDeleteDeck, onGenerate
         </fieldset>
 
         <p className="muted">Showing {filteredCards.length} results (capped).</p>
-        <div className="search-results">
+        <div className="search-results" onMouseLeave={() => setHoverPreview(null)}>
           {filteredCards.map((card) => {
             const copies = nameCounts.get(card.name) ?? 0;
             return (
-              <div className="search-row" key={card.id}>
-                <div>
-                  <strong>{card.name}</strong>
-                  <div className="muted">
-                    {card.type} | Cost {card.cost} | {card.civilizations.join("/")}
-                  </div>
-                </div>
-                <button type="button" onClick={() => addCard(card)} disabled={copies >= 4}>
-                  {copies >= 4 ? "Max 4" : "Add"}
-                </button>
-              </div>
+              <DeckSearchRow
+                key={card.id}
+                card={card}
+                copies={copies}
+                onAdd={addCard}
+                onPreview={handlePreview}
+                onLeave={() => setHoverPreview(null)}
+                onOpenInfo={(previewCard) => setMobilePreviewCard(previewCard)}
+              />
             );
           })}
         </div>
@@ -307,8 +369,9 @@ export function DeckBuilder({ cards, decks, onSaveDeck, onDeleteDeck, onGenerate
           </button>
         </div>
         <p>
-          Cards: <strong>{deckSize}</strong> (minimum 40, max 4 copies by card name)
+          Deck status: <strong>{deckStatusMessage}</strong> (minimum 40, max 4 copies by card name)
         </p>
+        {deckSize < 40 ? <p className="error-banner">Deck is not legal: add {40 - deckSize} more cards.</p> : null}
         {message ? <p className="status">{message}</p> : null}
 
         <div className="deck-list">
@@ -346,6 +409,16 @@ export function DeckBuilder({ cards, decks, onSaveDeck, onDeleteDeck, onGenerate
           ))}
         </div>
       </section>
+
+      {hoverPreview ? (
+        <div className="deck-hover-preview" style={{ left: `${hoverPreview.x}px`, top: `${hoverPreview.y}px` }}>
+          <CardFull card={hoverPreview.card} />
+        </div>
+      ) : null}
+
+      <Modal title="Card Preview" open={!!mobilePreviewCard} onClose={() => setMobilePreviewCard(null)}>
+        {mobilePreviewCard ? <CardFull card={mobilePreviewCard} /> : null}
+      </Modal>
     </div>
   );
 }

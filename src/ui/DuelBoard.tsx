@@ -1,13 +1,14 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import type { CardDefinition, SavedDeck } from "../data/types";
-import { PHASE_ORDER } from "../engine/reducer";
 import { canCreatureAttack, getOpponentId } from "../engine/selectors";
-import type { GameAction, GameState, PlayerId, ZoneName } from "../engine/types";
-import { CardView } from "./components/CardView";
+import type { GameAction, GameState, PlayerId } from "../engine/types";
 import { LogPanel } from "./components/LogPanel";
 import { ManaPaymentModal } from "./components/ManaPaymentModal";
 import { Modal } from "./components/Modal";
-import { ZoneView } from "./components/ZoneView";
+import { CardFull } from "./components/cards/CardFull";
+import { CardMini } from "./components/cards/CardMini";
+import { CivPips } from "./components/cards/CivPips";
 
 interface DuelBoardProps {
   cardsById: Record<string, CardDefinition>;
@@ -19,19 +20,9 @@ interface DuelBoardProps {
   onResetGame: () => void;
   game: GameState | null;
   dispatch: (action: GameAction) => void;
-}
-
-type ZoneInspector = {
-  playerId: PlayerId;
-  zone: ZoneName;
-};
-
-function nextPhaseLabel(phase: string): string {
-  const idx = PHASE_ORDER.indexOf(phase);
-  if (idx < 0 || idx === PHASE_ORDER.length - 1) {
-    return "End Turn";
-  }
-  return `Next: ${PHASE_ORDER[idx + 1]}`;
+  cardsReady: boolean;
+  loadingMessage: string;
+  onRetryCardLoad?: () => void;
 }
 
 export function DuelBoard({
@@ -43,18 +34,75 @@ export function DuelBoard({
   onStartGame,
   onResetGame,
   game,
-  dispatch
+  dispatch,
+  cardsReady,
+  loadingMessage,
+  onRetryCardLoad
 }: DuelBoardProps) {
   const [handActionCardId, setHandActionCardId] = useState<string | null>(null);
   const [attackingCreatureId, setAttackingCreatureId] = useState<string | null>(null);
-  const [inspector, setInspector] = useState<ZoneInspector | null>(null);
   const [detailCardId, setDetailCardId] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!toast) {
+      return;
+    }
+    const timer = window.setTimeout(() => setToast(null), 2200);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  const selectedDeckP1 = selectedDeckP1Id ? decks.find((deck) => deck.id === selectedDeckP1Id) ?? null : null;
+  const selectedDeckP2 = selectedDeckP2Id ? decks.find((deck) => deck.id === selectedDeckP2Id) ?? null : null;
+  const selectedDeckP1Valid = selectedDeckP1 ? selectedDeckP1.cardIds.filter((cardId) => !!cardsById[cardId]).length : 0;
+  const selectedDeckP2Valid = selectedDeckP2 ? selectedDeckP2.cardIds.filter((cardId) => !!cardsById[cardId]).length : 0;
+  const invalidDeckMessage = (() => {
+    if (!selectedDeckP1 || !selectedDeckP2) {
+      return null;
+    }
+    if (selectedDeckP1Valid < 40 || selectedDeckP2Valid < 40) {
+      return `Selected deck is invalid for duel: P1 has ${selectedDeckP1Valid} valid cards, P2 has ${selectedDeckP2Valid}. Need at least 40 valid cards each.`;
+    }
+    return null;
+  })();
 
   if (!game) {
+    if (!cardsReady) {
+      return (
+        <section className="panel">
+          <h2>Duel Boot</h2>
+          <p>{loadingMessage}</p>
+          <div className="row wrap gap">
+            {onRetryCardLoad ? (
+              <button type="button" onClick={onRetryCardLoad}>
+                Retry Card Load
+              </button>
+            ) : null}
+          </div>
+        </section>
+      );
+    }
+    if (decks.length === 0) {
+      return (
+        <section className="panel">
+          <h2>Duel Boot</h2>
+          <p>No decks available. Build or generate a deck first.</p>
+          <Link to="/deck-builder" className="inline-link-button">
+            Go to Deck Builder
+          </Link>
+        </section>
+      );
+    }
     return (
       <section className="panel">
-        <h2>Start Duel</h2>
+        <h2>Duel Boot</h2>
         <p>Choose two saved decks and start a hotseat match.</p>
+        {invalidDeckMessage ? <p className="error-banner">{invalidDeckMessage}</p> : null}
+        {invalidDeckMessage ? (
+          <Link to="/deck-builder" className="inline-link-button">
+            Fix Decks in Deck Builder
+          </Link>
+        ) : null}
         <div className="row wrap gap">
           <label>
             Player 1 Deck
@@ -78,10 +126,10 @@ export function DuelBoard({
               ))}
             </select>
           </label>
-          <button type="button" disabled={!selectedDeckP1Id || !selectedDeckP2Id} onClick={() => onStartGame("P1")}>
+          <button type="button" disabled={!selectedDeckP1Id || !selectedDeckP2Id || !!invalidDeckMessage} onClick={() => onStartGame("P1")}>
             Start (P1 first)
           </button>
-          <button type="button" disabled={!selectedDeckP1Id || !selectedDeckP2Id} onClick={() => onStartGame("P2")}>
+          <button type="button" disabled={!selectedDeckP1Id || !selectedDeckP2Id || !!invalidDeckMessage} onClick={() => onStartGame("P2")}>
             Start (P2 first)
           </button>
         </div>
@@ -90,32 +138,53 @@ export function DuelBoard({
   }
 
   const gameState = game;
+  const duelCardsById = gameState.cardIndex;
   const activePlayer = gameState.players[gameState.activePlayerId];
-  const defendingPlayerId = getOpponentId(gameState.activePlayerId);
-  const defendingPlayer = gameState.players[defendingPlayerId];
-  const canAdvancePhase = !gameState.pendingPrompt && !gameState.winnerId;
+  const opponentId = getOpponentId(gameState.activePlayerId);
+  const opponent = gameState.players[opponentId];
+  const handCardInstance = handActionCardId ? activePlayer.hand.find((card) => card.instanceId === handActionCardId) ?? null : null;
+  const handCardDefinition = handCardInstance ? duelCardsById[handCardInstance.cardId] ?? null : null;
+  const detailCard = detailCardId ? duelCardsById[detailCardId] ?? null : null;
+  const manaPrompt = gameState.pendingPayment;
+  const blockerPrompt = gameState.pendingPrompt?.type === "blocker" ? gameState.pendingPrompt : null;
+  const triggerPrompt = gameState.pendingPrompt?.type === "shieldTrigger" ? gameState.pendingPrompt : null;
+  const triggerCard =
+    triggerPrompt
+      ? (() => {
+          const owner = gameState.players[triggerPrompt.playerId];
+          const instance = owner.hand.find((card) => card.instanceId === triggerPrompt.handInstanceId);
+          return instance ? duelCardsById[instance.cardId] ?? null : null;
+        })()
+      : null;
 
-  const attackTargets = useMemo(() => {
+  const blockerChoices =
+    blockerPrompt
+      ? blockerPrompt.blockers
+          .map((instanceId) => gameState.players[blockerPrompt.defenderId].battle.find((card) => card.instanceId === instanceId))
+          .filter((entry): entry is NonNullable<typeof entry> => !!entry)
+      : [];
+
+  const attackTargets = (() => {
     if (!attackingCreatureId) {
       return [];
     }
     const targets = [
       {
-        id: `player-${defendingPlayer.id}`,
-        label: `Attack ${defendingPlayer.name}`,
+        id: `player-${opponent.id}`,
+        label: `Attack ${opponent.name}`,
         action: () =>
           dispatch({
             type: "DECLARE_ATTACK",
             attackerId: attackingCreatureId,
-            target: { kind: "player", playerId: defendingPlayer.id }
+            target: { kind: "player", playerId: opponent.id }
           })
       }
     ];
-    for (const creature of defendingPlayer.battle) {
+    for (const creature of opponent.battle) {
       if (!creature.tapped) {
         continue;
       }
-      const card = cardsById[creature.cardId];
+      const card = duelCardsById[creature.cardId];
       targets.push({
         id: creature.instanceId,
         label: `Attack tapped creature: ${card?.name ?? "Unknown"}`,
@@ -128,210 +197,252 @@ export function DuelBoard({
       });
     }
     return targets;
-  }, [attackingCreatureId, cardsById, defendingPlayer, dispatch]);
+  })();
 
-  const handCardInstance = handActionCardId ? activePlayer.hand.find((card) => card.instanceId === handActionCardId) ?? null : null;
-  const handCardDefinition = handCardInstance ? cardsById[handCardInstance.cardId] ?? null : null;
+  function showToast(message: string): void {
+    setToast(message);
+  }
 
-  const inspectedCards =
-    inspector
-      ? gameState.players[inspector.playerId][inspector.zone].map((instance) => ({
-          instance,
-          card: cardsById[instance.cardId] ?? null
-        }))
-      : [];
+  function handleNextPhase(): void {
+    if (gameState.winnerId) {
+      showToast("Game is over.");
+      return;
+    }
+    if (gameState.pendingPrompt || gameState.pendingPayment) {
+      showToast("Resolve pending choices first.");
+      return;
+    }
+    if (gameState.phase === "END") {
+      showToast("Use End Turn to pass turn.");
+      return;
+    }
+    dispatch({ type: "NEXT_PHASE" });
+  }
 
-  const detailCard = detailCardId ? cardsById[detailCardId] ?? null : null;
+  function handleEndTurn(): void {
+    if (gameState.winnerId) {
+      showToast("Game is over.");
+      return;
+    }
+    if (gameState.phase !== "END") {
+      showToast("End Turn is only available in END phase.");
+      return;
+    }
+    dispatch({ type: "END_TURN" });
+  }
 
-  const manaPrompt = gameState.pendingPrompt?.type === "manaPayment" ? gameState.pendingPrompt : null;
-  const blockerPrompt = gameState.pendingPrompt?.type === "blocker" ? gameState.pendingPrompt : null;
-  const triggerPrompt = gameState.pendingPrompt?.type === "shieldTrigger" ? gameState.pendingPrompt : null;
+  function attemptCharge(cardInstanceId: string): void {
+    if (gameState.phase !== "MANA") {
+      showToast("Mana charge is only allowed during MANA phase.");
+      return;
+    }
+    if (gameState.chargedManaThisTurn) {
+      showToast("You already charged mana this turn.");
+      return;
+    }
+    if (gameState.pendingPrompt || gameState.pendingPayment) {
+      showToast("Resolve current prompt first.");
+      return;
+    }
+    dispatch({ type: "CHARGE_MANA", handInstanceId: cardInstanceId });
+    setHandActionCardId(null);
+  }
 
-  const triggerCard =
-    triggerPrompt ? (() => {
-      const owner = gameState.players[triggerPrompt.playerId];
-      const instance = owner.hand.find((card) => card.instanceId === triggerPrompt.handInstanceId);
-      return instance ? cardsById[instance.cardId] ?? null : null;
-    })() : null;
+  function attemptCastOrSummon(cardInstanceId: string): void {
+    if (gameState.phase !== "MAIN") {
+      showToast("Cast/Summon is only allowed during MAIN phase.");
+      return;
+    }
+    if (gameState.pendingPrompt || gameState.pendingPayment) {
+      showToast("Resolve current prompt first.");
+      return;
+    }
+    dispatch({ type: "REQUEST_PLAY_CARD", handInstanceId: cardInstanceId });
+    setHandActionCardId(null);
+  }
 
-  const blockerChoices =
-    blockerPrompt
-      ? blockerPrompt.blockers
-          .map((instanceId) => gameState.players[blockerPrompt.defenderId].battle.find((card) => card.instanceId === instanceId))
-          .filter((entry): entry is NonNullable<typeof entry> => !!entry)
-      : [];
-
-  function renderBattleZone(playerId: PlayerId): JSX.Element {
+  function renderShieldSlots(playerId: PlayerId): JSX.Element {
     const player = gameState.players[playerId];
     return (
-      <ZoneView title={`${player.name} Battle Zone`} count={player.battle.length} onInspect={() => setInspector({ playerId, zone: "battle" })}>
-        <div className="card-row">
-          {player.battle.map((instance) => {
-            const card = cardsById[instance.cardId] ?? null;
-            const attackReady = playerId === gameState.activePlayerId && gameState.phase === "BATTLE" && canCreatureAttack(gameState, instance);
-            return (
-              <div className="stacked-card" key={instance.instanceId}>
-                <CardView
-                  card={card}
-                  instance={instance}
-                  compact
-                  onClick={() => setDetailCardId(instance.cardId)}
-                  selected={detailCardId === instance.cardId}
-                />
-                {attackReady ? (
-                  <button type="button" onClick={() => setAttackingCreatureId(instance.instanceId)}>
-                    Attack
-                  </button>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-      </ZoneView>
+      <div className="shield-row">
+        {Array.from({ length: 5 }, (_, index) => {
+          const isFilled = index < player.shields.length;
+          return (
+            <div key={`${playerId}-shield-${index}`} className={`shield-slot ${isFilled ? "filled" : "empty"}`}>
+              {isFilled ? <img src={`${import.meta.env.BASE_URL}card-back.svg`} alt="Shield" /> : <span />}
+            </div>
+          );
+        })}
+      </div>
     );
   }
 
-  function renderManaZone(playerId: PlayerId): JSX.Element {
+  function renderManaTiles(playerId: PlayerId): JSX.Element {
     const player = gameState.players[playerId];
     return (
-      <ZoneView title={`${player.name} Mana Zone`} count={player.mana.length} onInspect={() => setInspector({ playerId, zone: "mana" })}>
-        <div className="card-row">
-          {player.mana.map((instance) => (
-            <CardView
+      <div className="mana-tile-row">
+        {player.mana.map((instance) => {
+          const card = duelCardsById[instance.cardId] ?? null;
+          return (
+            <button
+              type="button"
               key={instance.instanceId}
-              card={cardsById[instance.cardId] ?? null}
-              instance={instance}
-              compact
+              className={`mana-tile ${instance.tapped ? "tapped" : "untapped"}`}
+              onMouseEnter={() => setDetailCardId(instance.cardId)}
+              onFocus={() => setDetailCardId(instance.cardId)}
               onClick={() => setDetailCardId(instance.cardId)}
-              selected={detailCardId === instance.cardId}
-            />
-          ))}
-        </div>
-      </ZoneView>
+              aria-label={`Mana card ${card?.name ?? "Unknown"}`}
+            >
+              <CivPips civilizations={card?.civilizations ?? []} />
+            </button>
+          );
+        })}
+      </div>
     );
   }
 
-  function renderShields(playerId: PlayerId): JSX.Element {
+  function renderBattleCards(playerId: PlayerId): JSX.Element {
     const player = gameState.players[playerId];
     return (
-      <ZoneView title={`${player.name} Shields`} count={player.shields.length}>
-        <div className="card-row">
-          {player.shields.map((instance) => (
-            <CardView key={instance.instanceId} card={null} hidden compact />
-          ))}
-        </div>
-      </ZoneView>
+      <div className="battle-card-row">
+        {player.battle.map((instance) => {
+          const card = duelCardsById[instance.cardId] ?? null;
+          const canAttack = playerId === gameState.activePlayerId && canCreatureAttack(gameState, instance) && gameState.phase === "BATTLE";
+          return (
+            <div className="stacked-card" key={instance.instanceId}>
+              <CardMini card={card} instance={instance} onClick={() => setDetailCardId(instance.cardId)} selected={detailCardId === instance.cardId} />
+              {playerId === gameState.activePlayerId ? (
+                <button
+                  type="button"
+                  className="tiny-button"
+                  onClick={() => {
+                    if (!canAttack) {
+                      showToast("Creature cannot attack right now.");
+                      return;
+                    }
+                    setAttackingCreatureId(instance.instanceId);
+                  }}
+                >
+                  Attack
+                </button>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
     );
   }
 
   return (
-    <div className="duel-layout">
-      <section className="panel">
-        <header className="row wrap gap">
-          <h2>Duel</h2>
-          <span className="pill">Turn {gameState.turnNumber}</span>
-          <span className="pill">Phase {gameState.phase}</span>
-          <span className="pill">
-            Active: {activePlayer.name}
-          </span>
-          {gameState.winnerId ? <span className="pill good">Winner: {gameState.players[gameState.winnerId].name}</span> : null}
-        </header>
+    <div className="duel-layout board-layout">
+      <section className="panel board-main">
+        <section className="field-side opponent-side">
+          <header className="field-header">
+            <h3>{opponent.name}</h3>
+            <div className="field-counts">
+              <span className="pill">Hand {opponent.hand.length}</span>
+              <span className="pill">Deck {opponent.deck.length}</span>
+              <span className="pill">Grave {opponent.graveyard.length}</span>
+            </div>
+          </header>
+          <div className="zone-block">
+            <h4>Shields</h4>
+            {renderShieldSlots(opponentId)}
+          </div>
+          <div className="zone-block">
+            <h4>Battle Zone</h4>
+            {renderBattleCards(opponentId)}
+          </div>
+          <div className="zone-block">
+            <h4>Mana Zone ({opponent.mana.length})</h4>
+            {renderManaTiles(opponentId)}
+          </div>
+        </section>
 
-        <div className="row wrap gap">
-          <button type="button" disabled={!canAdvancePhase} onClick={() => dispatch({ type: "NEXT_PHASE" })}>
-            {nextPhaseLabel(gameState.phase)}
+        <section className="field-side player-side">
+          <header className="field-header">
+            <h3>{activePlayer.name}</h3>
+            <div className="field-counts">
+              <span className="pill">Hand {activePlayer.hand.length}</span>
+              <span className="pill">Deck {activePlayer.deck.length}</span>
+              <span className="pill">Grave {activePlayer.graveyard.length}</span>
+            </div>
+          </header>
+          <div className="zone-block">
+            <h4>Shields</h4>
+            {renderShieldSlots(gameState.activePlayerId)}
+          </div>
+          <div className="zone-block">
+            <h4>Battle Zone</h4>
+            {renderBattleCards(gameState.activePlayerId)}
+          </div>
+          <div className="zone-block">
+            <h4>Mana Zone ({activePlayer.mana.length})</h4>
+            {renderManaTiles(gameState.activePlayerId)}
+          </div>
+          <div className="zone-block">
+            <h4>Hand</h4>
+            <div className="hand-card-row">
+              {activePlayer.hand.map((instance) => (
+                <CardMini
+                  key={instance.instanceId}
+                  card={duelCardsById[instance.cardId] ?? null}
+                  onClick={() => setHandActionCardId(instance.instanceId)}
+                  selected={handActionCardId === instance.instanceId}
+                />
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="panel log-wrapper">
+          <LogPanel entries={gameState.log} />
+        </section>
+      </section>
+
+      <aside className="panel side-panel phase-panel">
+        <h2>Current Turn</h2>
+        <p className="phase-owner">Active Player: {activePlayer.name}</p>
+        <p className="phase-big">CURRENT PHASE: {gameState.phase}</p>
+        <p>Turn {gameState.turnNumber}</p>
+        {gameState.winnerId ? <p className="status">Winner: {gameState.players[gameState.winnerId].name}</p> : null}
+        <div className="column gap">
+          <button type="button" onClick={handleNextPhase} disabled={!!gameState.winnerId}>
+            Next Phase
+          </button>
+          <button type="button" onClick={handleEndTurn} disabled={!!gameState.winnerId || gameState.phase !== "END"}>
+            End Turn
           </button>
           <button type="button" className="secondary" onClick={onResetGame}>
             New Duel
           </button>
-          {!gameState.winnerId ? (
-            <button type="button" className="danger" onClick={() => dispatch({ type: "CONCEDE", playerId: gameState.activePlayerId })}>
-              Concede (Active Player)
-            </button>
-          ) : null}
+          <button type="button" className="danger" onClick={() => dispatch({ type: "CONCEDE", playerId: gameState.activePlayerId })}>
+            Concede
+          </button>
         </div>
-
-        <div className="battlefield">
-          <section className="player-row opponent">
-            <h3>{defendingPlayer.name}</h3>
-            <div className="row wrap gap">
-              <ZoneView title="Deck" count={defendingPlayer.deck.length} />
-              <ZoneView title="Hand" count={defendingPlayer.hand.length} />
-              {renderShields(defendingPlayerId)}
-              {renderManaZone(defendingPlayerId)}
-              {renderBattleZone(defendingPlayerId)}
-              <ZoneView
-                title="Graveyard"
-                count={defendingPlayer.graveyard.length}
-                onInspect={() => setInspector({ playerId: defendingPlayerId, zone: "graveyard" })}
-              />
-            </div>
-          </section>
-
-          <section className="player-row active">
-            <h3>{activePlayer.name}</h3>
-            <div className="row wrap gap">
-              <ZoneView title="Deck" count={activePlayer.deck.length} />
-              <ZoneView title="Hand" count={activePlayer.hand.length} onInspect={() => setInspector({ playerId: gameState.activePlayerId, zone: "hand" })}>
-                <div className="card-row">
-                  {activePlayer.hand.map((instance) => (
-                    <CardView
-                      key={instance.instanceId}
-                      card={cardsById[instance.cardId] ?? null}
-                      compact
-                      onClick={() => setHandActionCardId(instance.instanceId)}
-                      selected={handActionCardId === instance.instanceId}
-                    />
-                  ))}
-                </div>
-              </ZoneView>
-              {renderShields(gameState.activePlayerId)}
-              {renderManaZone(gameState.activePlayerId)}
-              {renderBattleZone(gameState.activePlayerId)}
-              <ZoneView
-                title="Graveyard"
-                count={activePlayer.graveyard.length}
-                onInspect={() => setInspector({ playerId: gameState.activePlayerId, zone: "graveyard" })}
-              />
-            </div>
-          </section>
-        </div>
-      </section>
-
-      <aside className="panel side-panel">
         <h3>Card Detail</h3>
-        {detailCard ? (
-          <CardView card={detailCard} />
-        ) : (
-          <p className="muted">Select a card to inspect its details.</p>
-        )}
-        <LogPanel entries={gameState.log} />
+        {detailCard ? <CardFull card={detailCard} /> : <p className="muted">Hover or tap a card/mana tile to inspect.</p>}
       </aside>
 
-      <Modal title="Card Actions" open={!!handCardDefinition} onClose={() => setHandActionCardId(null)}>
+      {toast ? (
+        <div className="toast-banner" role="status">
+          {toast}
+        </div>
+      ) : null}
+
+      <Modal title="Hand Action" open={!!handCardDefinition} onClose={() => setHandActionCardId(null)}>
         {handCardDefinition && handCardInstance ? (
           <div className="column gap">
-            <CardView card={handCardDefinition} />
+            <CardFull card={handCardDefinition} instance={handCardInstance} />
             <div className="row wrap gap">
-              <button
-                type="button"
-                onClick={() => {
-                  dispatch({ type: "CHARGE_MANA", handInstanceId: handCardInstance.instanceId });
-                  setHandActionCardId(null);
-                }}
-                disabled={gameState.phase !== "MANA" || gameState.chargedManaThisTurn || !!gameState.pendingPrompt}
-              >
+              <button type="button" onClick={() => attemptCharge(handCardInstance.instanceId)}>
                 Charge to Mana
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  dispatch({ type: "REQUEST_PLAY_CARD", handInstanceId: handCardInstance.instanceId });
-                  setHandActionCardId(null);
-                }}
-                disabled={gameState.phase !== "MAIN" || !!gameState.pendingPrompt}
-              >
+              <button type="button" onClick={() => attemptCastOrSummon(handCardInstance.instanceId)}>
                 Cast / Summon
+              </button>
+              <button type="button" className="secondary" onClick={() => setHandActionCardId(null)}>
+                Cancel
               </button>
             </div>
           </div>
@@ -360,7 +471,7 @@ export function DuelBoard({
         open={!!manaPrompt}
         prompt={manaPrompt}
         player={manaPrompt ? gameState.players[manaPrompt.playerId] : null}
-        cardIndex={cardsById}
+        cardIndex={duelCardsById}
         onToggleMana={(instanceId) => dispatch({ type: "TOGGLE_MANA_SELECTION", manaInstanceId: instanceId })}
         onConfirm={() => dispatch({ type: "CONFIRM_MANA_PAYMENT" })}
         onCancel={() => dispatch({ type: "CANCEL_MANA_PAYMENT" })}
@@ -370,7 +481,7 @@ export function DuelBoard({
         <p>{blockerPrompt ? `${gameState.players[blockerPrompt.defenderId].name}, choose a blocker or decline.` : ""}</p>
         <div className="column gap">
           {blockerChoices.map((blocker) => {
-            const card = cardsById[blocker.cardId] ?? null;
+            const card = duelCardsById[blocker.cardId] ?? null;
             return (
               <button type="button" key={blocker.instanceId} onClick={() => dispatch({ type: "CHOOSE_BLOCKER", blockerId: blocker.instanceId })}>
                 Block with {card?.name ?? "Unknown"}
@@ -386,7 +497,7 @@ export function DuelBoard({
       <Modal title="Shield Trigger" open={!!triggerPrompt}>
         {triggerCard ? (
           <div className="column gap">
-            <CardView card={triggerCard} />
+            <CardFull card={triggerCard} />
             <p>Activate Shield Trigger?</p>
             <div className="row gap">
               <button type="button" onClick={() => dispatch({ type: "RESOLVE_SHIELD_TRIGGER", activate: true })}>
@@ -395,31 +506,6 @@ export function DuelBoard({
               <button type="button" className="secondary" onClick={() => dispatch({ type: "RESOLVE_SHIELD_TRIGGER", activate: false })}>
                 No
               </button>
-            </div>
-          </div>
-        ) : null}
-      </Modal>
-
-      <Modal title="Zone Inspector" open={!!inspector} onClose={() => setInspector(null)}>
-        {inspector ? (
-          <div className="column gap">
-            <p>
-              {gameState.players[inspector.playerId].name} - {inspector.zone}
-            </p>
-            <div className="card-row">
-              {inspectedCards.map(({ instance, card }) => {
-                const hidden = inspector.zone === "shields";
-                return (
-                  <CardView
-                    key={instance.instanceId}
-                    card={card}
-                    instance={instance}
-                    hidden={hidden}
-                    compact
-                    onClick={() => setDetailCardId(instance.cardId)}
-                  />
-                );
-              })}
             </div>
           </div>
         ) : null}

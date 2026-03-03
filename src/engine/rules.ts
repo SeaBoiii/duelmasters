@@ -2,11 +2,17 @@ import type { CardDefinition, KeywordFlags } from "../data/types";
 
 const POWER_ATTACKER_REGEX = /power attacker\s*\+(\d+)/i;
 
-export function parseKeywordFlags(text: string): KeywordFlags {
+export interface ParsedKeywords {
+  flags: KeywordFlags;
+  breakerCount: number;
+  powerAttackerBonus: number;
+}
+
+export function parseKeywords(text: string): ParsedKeywords {
   const normalized = text.toLowerCase();
   const powerMatch = text.match(POWER_ATTACKER_REGEX);
   const bonus = powerMatch ? Number.parseInt(powerMatch[1], 10) : 0;
-  return {
+  const flags: KeywordFlags = {
     blocker: /\bblocker\b/i.test(normalized),
     charger: /\bcharger\b/i.test(normalized),
     doubleBreaker: /\bdouble breaker\b/i.test(normalized),
@@ -15,6 +21,16 @@ export function parseKeywordFlags(text: string): KeywordFlags {
     slayer: /\bslayer\b/i.test(normalized),
     tripleBreaker: /\btriple breaker\b/i.test(normalized)
   };
+  const breakerCount = flags.tripleBreaker ? 3 : flags.doubleBreaker ? 2 : 1;
+  return {
+    flags,
+    breakerCount,
+    powerAttackerBonus: flags.powerAttackerBonus
+  };
+}
+
+export function parseKeywordFlags(text: string): KeywordFlags {
+  return parseKeywords(text).flags;
 }
 
 export function isCreature(card: CardDefinition): boolean {
@@ -41,6 +57,17 @@ export function getAttackingPower(card: CardDefinition, isAttacking: boolean): n
     return base;
   }
   return base + card.keywords.powerAttackerBonus;
+}
+
+export function formatPower(powerBase: number | null, powerHasPlus: boolean): string {
+  if (powerBase === null) {
+    return "—";
+  }
+  return `${powerBase}${powerHasPlus ? "+" : ""}`;
+}
+
+export function getManaCivilizations(card: CardDefinition): string[] {
+  return card.civilizations;
 }
 
 function collectCivilizations(cards: CardDefinition[]): Set<string> {
